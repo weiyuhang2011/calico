@@ -309,9 +309,16 @@ func (d *linuxDataplane) DoNetworking(
 	}
 
 	// Now that the host side of the veth is moved, state set to UP, and configured with sysctls, we can add the routes to it in the host namespace.
-	err = SetupRoutes(hostVeth, result)
-	if err != nil {
-		return "", "", fmt.Errorf("error adding host side routes for interface: %s, error: %s", hostVeth.Attrs().Name, err)
+	// TODO: skip adding routes if it is migrated-pod, and add route later
+	// ip route add <ip> dev <hostVethName>
+	_, ok := annotations["podlivemigration.openeuler.org/originalContainersID"]
+	if ok {
+		d.logger.Infof("Skipping adding host side routes for interface: %s", hostVeth.Attrs().Name)
+	} else {
+		err = SetupRoutes(hostVeth, result)
+		if err != nil {
+			return "", "", fmt.Errorf("error adding host side routes for interface: %s, error: %s", hostVeth.Attrs().Name, err)
+		}
 	}
 
 	return hostVethName, contVethMAC, err

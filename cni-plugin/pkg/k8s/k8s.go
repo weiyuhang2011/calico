@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -476,17 +477,35 @@ func CmdAddK8s(ctx context.Context, args *skel.CmdArgs, conf types.NetConf, epID
 		logger.WithField("endpoint", endpoint).Info("Added floatingIPs to endpoint")
 	}
 
-	// Write the endpoint object (either the newly created one, or the updated one)
-	// Pass special-case flag through to KDD to let it know what kind of patch to apply to the underlying
-	// Pod resource. (In Enterprise) Felix also modifies the pod through a patch and setting this avoids patching the
-	// same fields as Felix so that we can't clobber Felix's updates.
-	ctxPatchCNI := k8sresources.ContextWithPatchMode(ctx, k8sresources.PatchModeCNI)
-	if _, err := utils.CreateOrUpdate(ctxPatchCNI, calicoClient, endpoint); err != nil {
-		logger.WithError(err).Error("Error creating/updating endpoint in datastore.")
-		releaseIPAM()
-		return nil, err
+	// TODO: if it is migrate-pod, then write the wep to certain location?
+	// and apply the wep by calicoctl later
+	_, ok := annot["podlivemigration.openeuler.org/originalContainersID"]
+	if ok {
+		logger.Info("Found podlivemigration annotation, writing the endpoint to /var/lib/checkpoint")
+		path := filepath.Join("/var/lib/checkpoint/pod-wep", endpoint.Name+".json")
+		data, err := json.Marshal(endpoint)
+		if err != nil {
+			logger.WithError(err).Error("Failed to marshal endpoint to json")
+			return nil, err
+		}
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			logger.WithError(err).Error("Failed to write endpoint to file")
+			return nil, err
+		}
+		logger.WithField("path", path).Info("Wrote endpoint to file, waiting for calicoctl to apply it")
+	} else {
+		// Write the endpoint object (either the newly created one, or the updated one)
+		// Pass special-case flag through to KDD to let it know what kind of patch to apply to the underlying
+		// Pod resource. (In Enterprise) Felix also modifies the pod through a patch and setting this avoids patching the
+		// same fields as Felix so that we can't clobber Felix's updates.
+		ctxPatchCNI := k8sresources.ContextWithPatchMode(ctx, k8sresources.PatchModeCNI)
+		if _, err := utils.CreateOrUpdate(ctxPatchCNI, calicoClient, endpoint); err != nil {
+			logger.WithError(err).Error("Error creating/updating endpoint in datastore.")
+			releaseIPAM()
+			return nil, err
+		}
+		logger.Info("Wrote updated endpoint to datastore")
 	}
-	logger.Info("Wrote updated endpoint to datastore")
 
 	// Add the interface created above to the CNI result.
 	result.Interfaces = append(result.Interfaces, &cniv1.Interface{
